@@ -1,0 +1,18 @@
+# Rust
+/target
+# Cargo.lock is committed per SEC-009 (reproducible builds)
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+/tuix
+
+# Claude Code
+.claude/settings.local.json
+
+# OS
+.DS_Store
