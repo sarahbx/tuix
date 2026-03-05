@@ -14,11 +14,15 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, Mous
 /// - Not commonly captured by terminal applications
 /// - Traditional telnet escape character
 /// - Intercepted before PTY forwarding
+///
+/// Crossterm 0.28 maps bytes 0x1C–0x1F to Char('4')–Char('7') + CONTROL
+/// (parse.rs:110), so 0x1D (Ctrl+]) arrives as Char('5') + CONTROL.
+/// Both Ctrl+] and Ctrl+5 produce the same byte; both trigger unfocus.
 pub fn is_unfocus_event(event: &Event) -> bool {
     matches!(
         event,
         Event::Key(KeyEvent {
-            code: KeyCode::Char(']'),
+            code: KeyCode::Char('5'),
             modifiers: KeyModifiers::CONTROL,
             ..
         })
@@ -198,10 +202,22 @@ mod tests {
         );
     }
 
+    /// Crossterm 0.28 maps byte 0x1D (Ctrl+]) to Char('5') + CONTROL.
+    /// If this test fails after a crossterm upgrade, check parse.rs
+    /// for changes to the 0x1C–0x1F byte range mapping.
     #[test]
     fn unfocus_detected() {
-        let event = Event::Key(key(KeyCode::Char(']'), KeyModifiers::CONTROL));
+        let event = Event::Key(key(KeyCode::Char('5'), KeyModifiers::CONTROL));
         assert!(is_unfocus_event(&event));
+    }
+
+    /// Crossterm 0.28 never delivers Char(']') + CONTROL for byte 0x1D.
+    /// This test documents that expectation so a crossterm upgrade that
+    /// changes the mapping will surface as a test failure.
+    #[test]
+    fn bracket_char_not_unfocus() {
+        let event = Event::Key(key(KeyCode::Char(']'), KeyModifiers::CONTROL));
+        assert!(!is_unfocus_event(&event));
     }
 
     #[test]

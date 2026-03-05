@@ -36,6 +36,9 @@ Before producing your gate artifact, read the sections relevant to your role. Pr
 <!-- Session: 2026-03-05 -->
 - [Cross-Cutting] Human consistently chose "resolve" over "accept/defer" for all findings at every gate (Gates 2, 5, 6, 7) → This human values comprehensive resolution over shipping velocity; all findings should be fixed, not tracked → In future sessions, consider proactively resolving LOW/INFO findings before presenting them, offering the resolved state for approval rather than asking the human to decide disposition
 
+<!-- Session: 2026-03-05 (ctrl-bracket-hotkey) -->
+- [Cross-Cutting] When human requested mitigating one finding at Gate 2, proactively resolving all remaining findings in the same revision pass resulted in immediate approval → When the human escalates any finding, resolve all findings at that severity and below in a single pass rather than waiting for individual decisions → Eliminates multiple revision rounds and aligns with established preference for comprehensive resolution
+
 ---
 
 ## Gate 1: Architecture
