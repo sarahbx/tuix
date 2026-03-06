@@ -29,10 +29,16 @@ pub fn render(
     command: &str,
     cwd: &std::path::Path,
     alive: bool,
+    scroll_offset: usize,
 ) -> CloseButtonPos {
     let area = frame.area();
     let status = if alive { "" } else { " [exited]" };
-    let title = format!(" {}{} ", command, status);
+    let scroll_info = if scroll_offset > 0 {
+        format!(" [+{scroll_offset} lines]")
+    } else {
+        String::new()
+    };
+    let title = format!(" {}{}{} ", command, status, scroll_info);
     let cwd_str = format!(" {} ", cwd.display());
     let close_label = " [X] ";
 
@@ -85,6 +91,12 @@ pub fn render(
 
     // Render VT screen content at full size (SEC-002: from parsed buffer)
     render_screen_full(frame, screen, inner);
+
+    // Show cursor in focus view when: live view (not scrolled) and child has cursor visible
+    if scroll_offset == 0 && !screen.hide_cursor() {
+        let (row, col) = screen.cursor_position();
+        frame.set_cursor_position((inner.x + col, inner.y + row));
+    }
 
     CloseButtonPos {
         x: close_x,

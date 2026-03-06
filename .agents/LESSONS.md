@@ -50,6 +50,9 @@ Before producing your gate artifact, read the sections relevant to your role. Pr
 <!-- Session: 2026-03-05 (help-screen) -->
 - [Gate 1] Human corrected the hotkey choice to match existing conventions (Ctrl+ combos) → When proposing new hotkeys, always match the existing keybinding pattern of the codebase; do not default to bare keys when the app uses Ctrl+ combos throughout → Prevents a revision round and shows awareness of consistency
 
+<!-- Session: 2026-03-05 (scrollback) -->
+- [Gate 1] Human requested configurability ("ensure number of lines of history is easily configurable") during ADR review → When proposing fixed constants for user-facing limits, always make them configurable via CLI flags with sensible defaults → Prevents revision by anticipating the need for user control over tunable parameters
+
 ---
 
 ## Gate 2: Security Architecture
@@ -79,6 +82,9 @@ Before producing your gate artifact, read the sections relevant to your role. Pr
 
 <!-- Session: 2026-03-05 (help-screen) -->
 - [Gate 5] Pre-resolving SUGGESTED findings before presenting the gate resulted in clean first-pass approval → The pattern of fixing suggestions before presenting (rather than asking the human to decide) reduces gate friction and matches this human's preference for immediate resolution → Continue pre-resolving all non-controversial findings
+
+<!-- Session: 2026-03-06 (modifier-keys) -->
+- [Gate 5] When extracting tests to a separate file for a binary crate, anticipate the need to create a `lib.rs` to expose modules for integration tests → Plan the crate structure change as part of the extraction work, not as an afterthought → Prevents a second round of structural changes during implementation
 
 ---
 

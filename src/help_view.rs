@@ -30,6 +30,8 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("Ctrl+]", "Return to tile view"),
             ("Click [X]", "Return to tile view"),
+            ("Scroll wheel", "Scroll through history"),
+            ("Shift+PgUp/PgDn", "Page through history"),
             ("All other input", "Forwarded to session"),
         ],
     ),

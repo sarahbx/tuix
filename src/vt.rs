@@ -16,10 +16,21 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub fn new(rows: u16, cols: u16) -> Self {
+    pub fn new(rows: u16, cols: u16, scrollback_len: usize) -> Self {
         Self {
-            parser: vt100::Parser::new(rows, cols, 0),
+            parser: vt100::Parser::new(rows, cols, scrollback_len),
         }
+    }
+
+    /// Set the scrollback viewing offset. 0 = live view.
+    /// The value is clamped internally to the actual scrollback depth.
+    pub fn set_scrollback(&mut self, rows: usize) {
+        self.parser.set_scrollback(rows);
+    }
+
+    /// Get the current scrollback offset (after clamping by vt100).
+    pub fn scrollback(&self) -> usize {
+        self.parser.screen().scrollback()
     }
 
     /// Process raw PTY output. Bytes are parsed and consumed;
@@ -39,6 +50,17 @@ impl Screen {
 
     pub fn cols(&self) -> u16 {
         self.parser.screen().size().1
+    }
+
+    /// Get the cursor position as (row, col) from the vt100 parser.
+    /// Values are clamped to the virtual screen dimensions by vt100.
+    pub fn cursor_position(&self) -> (u16, u16) {
+        self.parser.screen().cursor_position()
+    }
+
+    /// Whether the child process has hidden the cursor (CSI ?25l).
+    pub fn hide_cursor(&self) -> bool {
+        self.parser.screen().hide_cursor()
     }
 
     /// Get the text content of a cell. Returns a space for empty cells.
@@ -153,20 +175,20 @@ mod tests {
 
     #[test]
     fn new_screen_has_correct_size() {
-        let screen = Screen::new(24, 80);
+        let screen = Screen::new(24, 80, 0);
         assert_eq!(screen.rows(), 24);
         assert_eq!(screen.cols(), 80);
     }
 
     #[test]
     fn empty_cell_returns_space() {
-        let screen = Screen::new(24, 80);
+        let screen = Screen::new(24, 80, 0);
         assert_eq!(screen.cell_content(0, 0), " ");
     }
 
     #[test]
     fn process_text_updates_cells() {
-        let mut screen = Screen::new(24, 80);
+        let mut screen = Screen::new(24, 80, 0);
         screen.process(b"Hello");
         assert_eq!(screen.cell_content(0, 0), "H");
         assert_eq!(screen.cell_content(0, 1), "e");
@@ -175,7 +197,7 @@ mod tests {
 
     #[test]
     fn resize_changes_dimensions() {
-        let mut screen = Screen::new(24, 80);
+        let mut screen = Screen::new(24, 80, 0);
         screen.resize(40, 120);
         assert_eq!(screen.rows(), 40);
         assert_eq!(screen.cols(), 120);
@@ -202,10 +224,111 @@ mod tests {
 
     #[test]
     fn styled_output_detected() {
-        let mut screen = Screen::new(24, 80);
+        let mut screen = Screen::new(24, 80, 0);
         // ESC[1m = bold, then "X", then ESC[0m = reset
         screen.process(b"\x1b[1mX\x1b[0m");
         let style = screen.cell_style(0, 0);
         assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn scrollback_default_zero() {
+        let screen = Screen::new(24, 80, 100);
+        assert_eq!(screen.scrollback(), 0);
+    }
+
+    #[test]
+    fn scrollback_set_and_get() {
+        let mut screen = Screen::new(3, 10, 100);
+        // Fill 6 lines to push 3 into scrollback (screen is 3 rows)
+        for i in 0..6 {
+            screen.process(format!("line {i}\n").as_bytes());
+        }
+        screen.set_scrollback(2);
+        assert_eq!(screen.scrollback(), 2);
+    }
+
+    #[test]
+    fn scrollback_clamps_to_available() {
+        let mut screen = Screen::new(3, 10, 100);
+        // Only push 2 lines into scrollback
+        for i in 0..5 {
+            screen.process(format!("line {i}\n").as_bytes());
+        }
+        // Try to scroll back further than available
+        screen.set_scrollback(999);
+        assert!(screen.scrollback() <= 5);
+    }
+
+    #[test]
+    fn scrollback_zero_disables() {
+        let mut screen = Screen::new(3, 10, 0);
+        for i in 0..10 {
+            screen.process(format!("line {i}\n").as_bytes());
+        }
+        screen.set_scrollback(5);
+        // No scrollback buffer → offset stays 0
+        assert_eq!(screen.scrollback(), 0);
+    }
+
+    #[test]
+    fn cursor_position_default() {
+        let screen = Screen::new(24, 80, 0);
+        assert_eq!(screen.cursor_position(), (0, 0));
+    }
+
+    #[test]
+    fn cursor_position_after_text() {
+        let mut screen = Screen::new(24, 80, 0);
+        screen.process(b"Hello");
+        assert_eq!(screen.cursor_position(), (0, 5));
+    }
+
+    #[test]
+    fn cursor_position_after_newline() {
+        let mut screen = Screen::new(24, 80, 0);
+        screen.process(b"Hello\r\nWorld");
+        assert_eq!(screen.cursor_position(), (1, 5));
+    }
+
+    #[test]
+    fn hide_cursor_default_visible() {
+        let screen = Screen::new(24, 80, 0);
+        assert!(!screen.hide_cursor());
+    }
+
+    #[test]
+    fn hide_cursor_after_csi() {
+        let mut screen = Screen::new(24, 80, 0);
+        // CSI ?25l = hide cursor
+        screen.process(b"\x1b[?25l");
+        assert!(screen.hide_cursor());
+    }
+
+    #[test]
+    fn show_cursor_after_hide() {
+        let mut screen = Screen::new(24, 80, 0);
+        screen.process(b"\x1b[?25l");
+        assert!(screen.hide_cursor());
+        // CSI ?25h = show cursor
+        screen.process(b"\x1b[?25h");
+        assert!(!screen.hide_cursor());
+    }
+
+    #[test]
+    fn scrollback_content_accessible() {
+        let mut screen = Screen::new(3, 10, 100);
+        // Use \r\n so cursor resets to column 0 each line
+        screen.process(b"AAAA\r\n");
+        screen.process(b"BBBB\r\n");
+        screen.process(b"CCCC\r\n");
+        screen.process(b"DDDD\r\n");
+        // Scrollback should contain "AAAA" and "BBBB"
+        screen.set_scrollback(1);
+        // Row 0 should show "BBBB" (last scrollback row)
+        assert_eq!(screen.cell_content(0, 0), "B");
+        screen.set_scrollback(0);
+        // Live view: row 0 should show "CCCC"
+        assert_eq!(screen.cell_content(0, 0), "C");
     }
 }

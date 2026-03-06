@@ -10,6 +10,7 @@ use crate::config::SessionDef;
 use crate::focus_view::{self, CloseButtonPos};
 use crate::help_view;
 use crate::input;
+use crate::layout::{focus_inner_dims, tile_inner_dims};
 use crate::session_manager::SessionManager;
 use crate::tile_view;
 use crossterm::event::{self, Event};
@@ -40,10 +41,15 @@ pub struct App {
     border_colors: HashMap<PathBuf, Color>,
     tile_areas: Vec<Rect>,
     close_button: Option<CloseButtonPos>,
+    scroll_offset: usize,
 }
 
 impl App {
-    pub fn new(defs: Vec<SessionDef>, terminal: &DefaultTerminal) -> Result<Self, String> {
+    pub fn new(
+        defs: Vec<SessionDef>,
+        scrollback: usize,
+        terminal: &DefaultTerminal,
+    ) -> Result<Self, String> {
         // Register signal handlers (SEC-007)
         register_signal_handlers();
 
@@ -54,7 +60,7 @@ impl App {
             tile_inner_dims(size.height, size.width, defs.len());
 
         for def in &defs {
-            manager.spawn_session(def, tile_rows, tile_cols)?;
+            manager.spawn_session(def, tile_rows, tile_cols, scrollback)?;
         }
 
         let cwds: Vec<PathBuf> = manager.sessions.iter().map(|s| s.cwd.clone()).collect();
@@ -68,6 +74,7 @@ impl App {
             border_colors,
             tile_areas: Vec::new(),
             close_button: None,
+            scroll_offset: 0,
         })
     }
 
@@ -240,6 +247,26 @@ impl App {
             }
         }
 
+        // SEC-SCROLL-TAM-001: Intercept scroll events BEFORE PTY forwarding
+        if input::is_scroll_up(&event) {
+            let amount = if matches!(event, Event::Mouse(_)) {
+                input::MOUSE_SCROLL_LINES
+            } else {
+                self.focus_page_size(terminal)
+            };
+            self.scroll_offset = self.scroll_offset.saturating_add(amount);
+            return Ok(());
+        }
+        if input::is_scroll_down(&event) {
+            let amount = if matches!(event, Event::Mouse(_)) {
+                input::MOUSE_SCROLL_LINES
+            } else {
+                self.focus_page_size(terminal)
+            };
+            self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+            return Ok(());
+        }
+
         // Forward all other key events to the PTY
         if let Event::Key(key) = event {
             if let Some(bytes) = input::key_to_pty_bytes(&key) {
@@ -250,6 +277,16 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Compute page size for keyboard scrolling (visible height minus 1 for context).
+    fn focus_page_size(&self, terminal: &DefaultTerminal) -> usize {
+        terminal
+            .size()
+            .map(|s| focus_inner_dims(s.height, s.width).0 as usize)
+            .unwrap_or(20)
+            .saturating_sub(1)
+            .max(1)
     }
 
     /// Handle input in help view. No PTY writes occur here (SEC-001).
@@ -265,6 +302,7 @@ impl App {
     /// SEC-R-001: Queries terminal size fresh on every view transition.
     fn transition_to_focus(&mut self, session_id: usize, terminal: &DefaultTerminal) {
         self.state = ViewState::Focus { session_id };
+        self.scroll_offset = 0;
         if let Ok(size) = terminal.size() {
             let (rows, cols) = focus_inner_dims(size.height, size.width);
             self.session_manager.resize_session(session_id, rows, cols);
@@ -279,6 +317,7 @@ impl App {
         terminal: &DefaultTerminal,
     ) {
         self.state = ViewState::Tile { selected };
+        self.scroll_offset = 0;
         if let Ok(size) = terminal.size() {
             let (rows, cols) = tile_inner_dims(
                 size.height,
@@ -302,10 +341,20 @@ impl App {
     }
 
     fn render(&mut self, terminal: &mut DefaultTerminal) -> Result<(), String> {
+        // Set scrollback offset before render (needs mutable session access)
+        if let ViewState::Focus { session_id } = self.state {
+            if let Some(session) = self.session_manager.sessions.get_mut(session_id) {
+                session.screen.set_scrollback(self.scroll_offset);
+                // SEC-SCROLL-OOB-001: Read back clamped value
+                self.scroll_offset = session.screen.scrollback();
+            }
+        }
+
         let state = &self.state;
         let sessions = &self.session_manager.sessions;
         let colors = &self.border_colors;
         let blur = self.blur_enabled;
+        let scroll_offset = self.scroll_offset;
         let mut close_btn = None;
         let mut tile_areas_out = Vec::new();
 
@@ -324,6 +373,7 @@ impl App {
                                 &session.command,
                                 &session.cwd,
                                 session.alive,
+                                scroll_offset,
                             ));
                         }
                     }
@@ -336,32 +386,16 @@ impl App {
 
         self.tile_areas = tile_areas_out;
         self.close_button = close_btn;
+
+        // Reset scrollback after render so tile view sees live content
+        if let ViewState::Focus { session_id } = self.state {
+            if let Some(session) = self.session_manager.sessions.get_mut(session_id) {
+                session.screen.set_scrollback(0);
+            }
+        }
+
         Ok(())
     }
-}
-
-/// Minimum tile inner dimensions (SEC-R-003).
-const MIN_TILE_ROWS: u16 = 5;
-const MIN_TILE_COLS: u16 = 20;
-
-/// Compute tile inner dimensions from terminal size and session count.
-/// SEC-R-003: Enforces minimum dimension floor with saturating arithmetic.
-fn tile_inner_dims(term_rows: u16, term_cols: u16, session_count: usize) -> (u16, u16) {
-    if session_count == 0 {
-        return (MIN_TILE_ROWS, MIN_TILE_COLS);
-    }
-    let (grid_cols, grid_rows) = tile_view::calculate_grid(session_count);
-    let tile_h = (term_rows / grid_rows as u16).saturating_sub(2);
-    let tile_w = (term_cols / grid_cols as u16).saturating_sub(2);
-    (tile_h.max(MIN_TILE_ROWS), tile_w.max(MIN_TILE_COLS))
-}
-
-/// Compute focus view inner dimensions from terminal size.
-/// No minimum floor here — focus view occupies the full terminal minus borders.
-/// The zero-dim guard in Session::resize() handles the edge case where
-/// the terminal is too small (≤2 rows or cols).
-fn focus_inner_dims(term_rows: u16, term_cols: u16) -> (u16, u16) {
-    (term_rows.saturating_sub(2), term_cols.saturating_sub(2))
 }
 
 fn register_signal_handlers() {
@@ -379,56 +413,3 @@ extern "C" fn handle_signal(_: nix::libc::c_int) {
     QUIT_SIGNAL.store(true, Ordering::Relaxed);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tile_inner_dims_normal() {
-        // 50x200 terminal, 4 sessions → 2x2 grid
-        // tile_h = 50/2 - 2 = 23, tile_w = 200/2 - 2 = 98
-        let (rows, cols) = tile_inner_dims(50, 200, 4);
-        assert_eq!(rows, 23);
-        assert_eq!(cols, 98);
-    }
-
-    #[test]
-    fn tile_inner_dims_enforces_minimum_floor() {
-        // 10x10 terminal, 100 sessions → 10x10 grid
-        // tile_h = 10/10 - 2 = 0 → clamped to MIN_TILE_ROWS (5)
-        // tile_w = 10/10 - 2 = 0 → clamped to MIN_TILE_COLS (20)
-        let (rows, cols) = tile_inner_dims(10, 10, 100);
-        assert_eq!(rows, MIN_TILE_ROWS);
-        assert_eq!(cols, MIN_TILE_COLS);
-    }
-
-    #[test]
-    fn tile_inner_dims_zero_sessions() {
-        let (rows, cols) = tile_inner_dims(50, 200, 0);
-        assert_eq!(rows, MIN_TILE_ROWS);
-        assert_eq!(cols, MIN_TILE_COLS);
-    }
-
-    #[test]
-    fn tile_inner_dims_single_session() {
-        // 24x80 terminal, 1 session → 1x1 grid
-        // tile_h = 24/1 - 2 = 22, tile_w = 80/1 - 2 = 78
-        let (rows, cols) = tile_inner_dims(24, 80, 1);
-        assert_eq!(rows, 22);
-        assert_eq!(cols, 78);
-    }
-
-    #[test]
-    fn focus_inner_dims_normal() {
-        let (rows, cols) = focus_inner_dims(50, 200);
-        assert_eq!(rows, 48);
-        assert_eq!(cols, 198);
-    }
-
-    #[test]
-    fn focus_inner_dims_small_terminal() {
-        let (rows, cols) = focus_inner_dims(2, 2);
-        assert_eq!(rows, 0);
-        assert_eq!(cols, 0);
-    }
-}

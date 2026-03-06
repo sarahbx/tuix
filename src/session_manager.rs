@@ -30,6 +30,7 @@ impl SessionManager {
         def: &SessionDef,
         screen_rows: u16,
         screen_cols: u16,
+        scrollback_len: usize,
     ) -> Result<(), String> {
         let id = self.sessions.len();
         let session = Session::spawn(
@@ -39,6 +40,7 @@ impl SessionManager {
             &def.env,
             screen_rows,
             screen_cols,
+            scrollback_len,
             self.event_tx.clone(),
         )?;
         self.sessions.push(session);

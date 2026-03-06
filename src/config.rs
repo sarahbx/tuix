@@ -28,6 +28,8 @@ KEYBINDINGS:
                 Ctrl+q             Quit
     Focus view: Ctrl+]             Return to tile view
                 Click [X]          Return to tile view
+                Scroll wheel       Scroll through history
+                Shift+PgUp/PgDn    Page through history
                 All other input    Forwarded to session"
 )]
 pub struct Config {
@@ -40,6 +42,10 @@ pub struct Config {
     /// Use this flag to override or add variables.
     #[arg(long = "env", value_name = "KEY=VALUE", value_parser = parse_env_pair)]
     pub env_overrides: Vec<(String, String)>,
+
+    /// Number of scrollback lines per session (0 to disable).
+    #[arg(long, default_value_t = 1000)]
+    pub scrollback: usize,
 }
 
 /// A parsed session definition ready for spawning.
@@ -96,9 +102,17 @@ pub fn parse_session_defs(config: &Config) -> Result<Vec<SessionDef>, String> {
         .collect()
 }
 
+/// SEC-SCROLL-DoS-001: Maximum scrollback to prevent memory exhaustion.
+const MAX_SCROLLBACK: usize = 50_000;
+
 /// Parse and validate all session definitions before TUI launch.
 /// Checks that commands exist in PATH and directories exist.
 pub fn validate(config: &Config) -> Result<Vec<SessionDef>, String> {
+    if config.scrollback > MAX_SCROLLBACK {
+        return Err(format!(
+            "--scrollback must be at most {MAX_SCROLLBACK}"
+        ));
+    }
     let defs = parse_session_defs(config)?;
     for def in &defs {
         if !def.cwd.is_dir() {
@@ -172,6 +186,7 @@ mod tests {
         let config = Config {
             sessions: vec!["tuix_nonexistent_cmd_xyz".to_string()],
             env_overrides: vec![],
+            scrollback: 1000,
         };
         let err = validate(&config).unwrap_err();
         assert!(err.contains("not found in PATH"), "got: {err}");
@@ -182,6 +197,7 @@ mod tests {
         let config = Config {
             sessions: vec!["bash@/no/such/dir/tuix_test".to_string()],
             env_overrides: vec![],
+            scrollback: 1000,
         };
         let err = validate(&config).unwrap_err();
         assert!(err.contains("does not exist"), "got: {err}");
@@ -193,6 +209,28 @@ mod tests {
         let config = Config {
             sessions: vec!["sh".to_string()],
             env_overrides: vec![],
+            scrollback: 1000,
+        };
+        assert!(validate(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_excessive_scrollback() {
+        let config = Config {
+            sessions: vec!["sh".to_string()],
+            env_overrides: vec![],
+            scrollback: 100_000,
+        };
+        let err = validate(&config).unwrap_err();
+        assert!(err.contains("50000"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_accepts_zero_scrollback() {
+        let config = Config {
+            sessions: vec!["sh".to_string()],
+            env_overrides: vec![],
+            scrollback: 0,
         };
         assert!(validate(&config).is_ok());
     }

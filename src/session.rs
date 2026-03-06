@@ -50,6 +50,7 @@ impl Session {
         env: &[(String, String)],
         screen_rows: u16,
         screen_cols: u16,
+        scrollback_len: usize,
         event_tx: mpsc::Sender<AppEvent>,
     ) -> Result<Self, String> {
         let pty = nix::pty::openpty(None, None).map_err(|e| format!("openpty: {e}"))?;
@@ -138,7 +139,7 @@ impl Session {
                 Ok(Session {
                     master_fd: master_raw,
                     child_pid: child,
-                    screen: Screen::new(screen_rows, screen_cols),
+                    screen: Screen::new(screen_rows, screen_cols, scrollback_len),
                     cwd: cwd.to_path_buf(),
                     command: command.to_string(),
                     alive: true,
