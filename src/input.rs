@@ -8,7 +8,7 @@
 /// Focus { session_id } match arm. This module provides conversion
 /// utilities but does not decide when to forward.
 
-use crossterm::event::{
+use ratatui::crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind,
 };
 
@@ -17,8 +17,8 @@ use crossterm::event::{
 /// - Traditional telnet escape character
 /// - Intercepted before PTY forwarding
 ///
-/// Crossterm 0.28 maps bytes 0x1C–0x1F to Char('4')–Char('7') + CONTROL
-/// (parse.rs:110), so 0x1D (Ctrl+]) arrives as Char('5') + CONTROL.
+/// Crossterm maps bytes 0x1C–0x1F to Char('4')–Char('7') + CONTROL,
+/// so 0x1D (Ctrl+]) arrives as Char('5') + CONTROL.
 /// Both Ctrl+] and Ctrl+5 produce the same byte; both trigger unfocus.
 pub fn is_unfocus_event(event: &Event) -> bool {
     matches!(

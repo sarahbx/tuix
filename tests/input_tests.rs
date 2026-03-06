@@ -1,6 +1,6 @@
 /// Tests for input handling: hotkey detection and key-to-PTY-bytes conversion.
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use tuix::input;
 
 fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -142,7 +142,7 @@ fn f5_plain_and_modified() {
     );
 }
 
-/// Crossterm 0.28 maps byte 0x1D (Ctrl+]) to Char('5') + CONTROL.
+/// Crossterm maps byte 0x1D (Ctrl+]) to Char('5') + CONTROL.
 /// If this test fails after a crossterm upgrade, check parse.rs
 /// for changes to the 0x1C–0x1F byte range mapping.
 #[test]
@@ -151,7 +151,7 @@ fn unfocus_detected() {
     assert!(input::is_unfocus_event(&event));
 }
 
-/// Crossterm 0.28 never delivers Char(']') + CONTROL for byte 0x1D.
+/// Crossterm never delivers Char(']') + CONTROL for byte 0x1D.
 /// This test documents that expectation so a crossterm upgrade that
 /// changes the mapping will surface as a test failure.
 #[test]
@@ -186,7 +186,7 @@ fn regular_h_not_help() {
 
 #[test]
 fn mouse_scroll_up_detected() {
-    let event = Event::Mouse(crossterm::event::MouseEvent {
+    let event = Event::Mouse(ratatui::crossterm::event::MouseEvent {
         kind: MouseEventKind::ScrollUp,
         column: 0,
         row: 0,
@@ -198,7 +198,7 @@ fn mouse_scroll_up_detected() {
 
 #[test]
 fn mouse_scroll_down_detected() {
-    let event = Event::Mouse(crossterm::event::MouseEvent {
+    let event = Event::Mouse(ratatui::crossterm::event::MouseEvent {
         kind: MouseEventKind::ScrollDown,
         column: 0,
         row: 0,

@@ -17,8 +17,8 @@
 ///               All other input forwarded to session
 
 use clap::Parser;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
-use crossterm::terminal::{
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use std::io;
@@ -52,14 +52,14 @@ fn run(defs: Vec<config::SessionDef>, scrollback: usize) -> Result<(), String> {
 
     // Restore terminal (always, even on error — AUD-003)
     let _ = disable_raw_mode();
-    let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+    let _ = ratatui::crossterm::execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
 
     result
 }
 
 fn run_inner(defs: Vec<config::SessionDef>, scrollback: usize) -> Result<(), String> {
     let mut stdout = io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
+    ratatui::crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
         .map_err(|e| format!("terminal setup: {e}"))?;
 
     let backend = ratatui::backend::CrosstermBackend::new(io::stdout());

@@ -53,6 +53,9 @@ Before producing your gate artifact, read the sections relevant to your role. Pr
 <!-- Session: 2026-03-05 (scrollback) -->
 - [Gate 1] Human requested configurability ("ensure number of lines of history is easily configurable") during ADR review → When proposing fixed constants for user-facing limits, always make them configurable via CLI flags with sensible defaults → Prevents revision by anticipating the need for user control over tunable parameters
 
+<!-- Session: 2026-03-06 (lru-vulnerability-fix) -->
+- [Gate 1] Human rejected the recommended "minimal" dependency update option and directed using the "full update" option instead → When presenting dependency update options, prefer recommending the comprehensive approach (full version alignment) over the minimal approach (compatibility shims/feature flags), especially when the full approach is cleaner long-term → This human values clean dependency alignment over minimal blast radius; prevents a revision round at Gate 1
+
 ---
 
 ## Gate 2: Security Architecture

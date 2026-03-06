@@ -13,7 +13,7 @@ use crate::input;
 use crate::layout::{focus_inner_dims, tile_inner_dims};
 use crate::session_manager::SessionManager;
 use crate::tile_view;
-use crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::DefaultTerminal;
@@ -187,33 +187,33 @@ impl App {
         // Keyboard navigation
         if let Event::Key(key) = &event {
             match key.code {
-                crossterm::event::KeyCode::Enter => {
+                ratatui::crossterm::event::KeyCode::Enter => {
                     if let ViewState::Tile { selected: Some(idx) } = self.state {
                         if idx < self.session_manager.sessions.len() {
                             self.transition_to_focus(idx, terminal);
                         }
                     }
                 }
-                crossterm::event::KeyCode::Right | crossterm::event::KeyCode::Tab => {
+                ratatui::crossterm::event::KeyCode::Right | ratatui::crossterm::event::KeyCode::Tab => {
                     self.move_selection(1);
                 }
-                crossterm::event::KeyCode::Left
-                | crossterm::event::KeyCode::BackTab => {
+                ratatui::crossterm::event::KeyCode::Left
+                | ratatui::crossterm::event::KeyCode::BackTab => {
                     self.move_selection(-1);
                 }
-                crossterm::event::KeyCode::Down => {
+                ratatui::crossterm::event::KeyCode::Down => {
                     let (cols, _) = tile_view::calculate_grid(
                         self.session_manager.sessions.len(),
                     );
                     self.move_selection(cols as isize);
                 }
-                crossterm::event::KeyCode::Up => {
+                ratatui::crossterm::event::KeyCode::Up => {
                     let (cols, _) = tile_view::calculate_grid(
                         self.session_manager.sessions.len(),
                     );
                     self.move_selection(-(cols as isize));
                 }
-                crossterm::event::KeyCode::Char(c) if c.is_ascii_digit() => {
+                ratatui::crossterm::event::KeyCode::Char(c) if c.is_ascii_digit() => {
                     let idx = c as usize - '0' as usize;
                     if idx < self.session_manager.sessions.len() {
                         self.transition_to_focus(idx, terminal);
