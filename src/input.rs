@@ -100,6 +100,30 @@ pub fn is_help_event(event: &Event) -> bool {
     )
 }
 
+/// Remove dead session: Ctrl+w in tile view.
+pub fn is_remove_session_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key(KeyEvent {
+            code: KeyCode::Char('w'),
+            modifiers: KeyModifiers::CONTROL,
+            ..
+        })
+    )
+}
+
+/// New session: Ctrl+n in tile view.
+pub fn is_new_session_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key(KeyEvent {
+            code: KeyCode::Char('n'),
+            modifiers: KeyModifiers::CONTROL,
+            ..
+        })
+    )
+}
+
 /// Toggle blur mode: Ctrl+b in tile view.
 pub fn is_blur_toggle(event: &Event) -> bool {
     matches!(

@@ -56,6 +56,10 @@ Before producing your gate artifact, read the sections relevant to your role. Pr
 <!-- Session: 2026-03-06 (lru-vulnerability-fix) -->
 - [Gate 1] Human rejected the recommended "minimal" dependency update option and directed using the "full update" option instead → When presenting dependency update options, prefer recommending the comprehensive approach (full version alignment) over the minimal approach (compatibility shims/feature flags), especially when the full approach is cleaner long-term → This human values clean dependency alignment over minimal blast radius; prevents a revision round at Gate 1
 
+<!-- Session: 2026-03-09 -->
+- [Gate 1] Human provided direct answers to all open questions in a single message, then requested removing the Open Questions section entirely → When presenting an ADR with open questions, make them answerable inline (yes/no, pick a value) so the human can resolve them all at once → Reduces revision rounds; do not re-present resolved questions as "open"
+- [Gate 1] Human corrected a feature scope assumption — "Shift+click already works, just document it" → Before proposing implementation work for a feature, verify whether it already works natively in the existing system → Prevents wasted engineering effort and an unnecessary ADR revision
+
 ---
 
 ## Gate 2: Security Architecture
@@ -76,6 +80,12 @@ Before producing your gate artifact, read the sections relevant to your role. Pr
 <!-- Session: 2026-03-04 -->
 - [Gate 4] Human requested structural changes during code review (extract function for future extensibility, naming conventions) → When human signals future expansion plans ("I will be adding many other arguments"), design for that extensibility immediately → Reduces rework in later sessions by incorporating known future direction
 
+<!-- Session: 2026-03-09 -->
+- [Gate 4] Human rejected literal integer defaults in test code ("please move these values to some form of constant") → When adding configurable values with defaults, define them as named public constants and use those constants in both production code and tests → Prevents maintenance burden of updating magic numbers across multiple test sites
+
+<!-- Session: 2026-03-09 (inclusive-language) -->
+- [Gate 4] Human corrected enforcement scope from "4, 5, 6, 7" to "all gates" for a cross-cutting requirement → When a requirement governs language, style, or conventions (not just code), it applies at every gate — architecture text, security reviews, and sprint briefs must also comply → Cross-cutting requirements default to all-gate enforcement unless there is a specific reason to restrict scope
+
 ---
 
 ## Gate 5: Code Review
@@ -88,6 +98,10 @@ Before producing your gate artifact, read the sections relevant to your role. Pr
 
 <!-- Session: 2026-03-06 (modifier-keys) -->
 - [Gate 5] When extracting tests to a separate file for a binary crate, anticipate the need to create a `lib.rs` to expose modules for integration tests → Plan the crate structure change as part of the extraction work, not as an afterthought → Prevents a second round of structural changes during implementation
+
+<!-- Session: 2026-03-09 -->
+- [Gate 5] Human directed "retain n/Esc as the method to exit the confirm view" when condensed code changed the cancel behavior → When refactoring for line count reduction, preserve user-facing behavior exactly; do not change keybinding semantics as a side effect of code condensation → Behavioral changes disguised as refactors will be caught and rejected
+- [Gate 5] Human rejected combining unrelated variable initializations onto single lines ("each variable should be defined on its own line, unless returned by a function as a tuple") → Do not combine disparate variable declarations for line savings; only use tuple destructuring for values returned together from a function → Readability trumps line count reduction
 
 ---
 
@@ -103,6 +117,11 @@ Before producing your gate artifact, read the sections relevant to your role. Pr
 <!-- Session: 2026-03-05 -->
 - [Gate 7] Human requested resolving all LOW and INFO audit findings rather than accepting/tracking → Consistent pattern across all gates: this human prefers resolving all findings at every severity level → For future sessions, strongly consider pre-resolving all findings (including LOW/INFO) before presenting the gate, or at minimum present them with implemented fixes ready for approval
 - [Gate 7] Post-fork async-signal-safety is a real concern in Rust PTY code → When using fork/exec, prepare all data (environment, paths, working directory) before fork and use only libc calls in the child → Eliminates an entire class of subtle threading bugs
+
+<!-- Session: 2026-03-09 -->
+- [Gate 7] Human rejected Gate 7 twice to request infrastructure improvements (cargo audit in CI, version bump, edition bump) → The final security gate is where the human validates the entire release, not just the code diff; be prepared for scope additions that improve the project's security posture or release hygiene → Gate 7 rejections are not always about code findings; they can be about build/release process gaps
+- [Gate 7] Human asked about Rust edition currency ("the current year is 2026, so I imagine it has been updated") → When a project uses an older edition, proactively flag it as a potential upgrade at Gate 7 or during engineering → Keeping the edition current is part of release hygiene
+- [Gate 7] Human requested `cargo audit` be added to the build pipeline → Dependency vulnerability scanning should be part of the standard build/test pipeline, not a manual step → Add `cargo audit` to Containerfile as a default practice for Rust projects
 
 ---
 

@@ -7,31 +7,32 @@
 
 use crate::color::assign_border_colors;
 use crate::config::SessionDef;
-use crate::focus_view::{self, CloseButtonPos};
+use crate::confirm_view;
+use crate::focus_view;
 use crate::help_view;
 use crate::input;
 use crate::layout::{focus_inner_dims, tile_inner_dims};
+use crate::scrollbar::{self, ScrollbarGeometry};
 use crate::session_manager::SessionManager;
+use crate::signal::QUIT_SIGNAL;
 use crate::tile_view;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::DefaultTerminal;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-/// SEC-001: Three-state enum with exhaustive matching.
+/// SEC-001: Four-state enum with exhaustive matching.
 /// PTY input is only forwarded in the Focus variant.
 pub enum ViewState {
     Tile { selected: Option<usize> },
     Focus { session_id: usize },
+    Confirm { session_id: usize },
     Help,
 }
-
-/// Signal handler flag for SIGTERM/SIGHUP (SEC-007).
-static QUIT_SIGNAL: AtomicBool = AtomicBool::new(false);
 
 pub struct App {
     state: ViewState,
@@ -40,30 +41,33 @@ pub struct App {
     blur_enabled: bool,
     border_colors: HashMap<PathBuf, Color>,
     tile_areas: Vec<Rect>,
-    close_button: Option<CloseButtonPos>,
+    close_button: Option<focus_view::CloseButtonPos>,
     scroll_offset: usize,
+    max_scrollback: usize,
+    scrollbar_geo: Option<ScrollbarGeometry>,
+    scrollbar_dragging: bool,
 }
 
 impl App {
     pub fn new(
         defs: Vec<SessionDef>,
         scrollback: usize,
+        max_sessions: usize,
+        env_overrides: Vec<(String, String)>,
         terminal: &DefaultTerminal,
     ) -> Result<Self, String> {
-        // Register signal handlers (SEC-007)
-        register_signal_handlers();
+        crate::signal::register_signal_handlers();
 
-        let mut manager = SessionManager::new();
-
+        let mut manager = SessionManager::new(max_sessions, scrollback, env_overrides);
         let size = terminal.size().map_err(|e| format!("terminal size: {e}"))?;
-        let (tile_rows, tile_cols) =
-            tile_inner_dims(size.height, size.width, defs.len());
+        let (tile_rows, tile_cols) = tile_inner_dims(size.height, size.width, defs.len());
 
         for def in &defs {
-            manager.spawn_session(def, tile_rows, tile_cols, scrollback)?;
+            manager.spawn_session(def, tile_rows, tile_cols)?;
         }
 
-        let cwds: Vec<PathBuf> = manager.sessions.iter().map(|s| s.cwd.clone()).collect();
+        let cwds: Vec<PathBuf> =
+            manager.ordered_session_refs().iter().map(|s| s.cwd.clone()).collect();
         let border_colors = assign_border_colors(&cwds);
 
         Ok(Self {
@@ -75,72 +79,52 @@ impl App {
             tile_areas: Vec::new(),
             close_button: None,
             scroll_offset: 0,
+            max_scrollback: 0,
+            scrollbar_geo: None,
+            scrollbar_dragging: false,
         })
     }
 
     /// Main event loop.
-    /// SEC-004: Render rate is bounded by the poll timeout (~20 FPS).
-    /// PTY events are drained in batch per tick; high-volume output
-    /// causes more process() calls but not more render cycles.
+    /// SEC-004: Render rate bounded by poll timeout (~20 FPS).
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), String> {
         let tick_rate = Duration::from_millis(50);
-
         loop {
-            // Check for external quit signal (SEC-007)
-            if QUIT_SIGNAL.load(Ordering::Relaxed) {
+            if QUIT_SIGNAL.load(Ordering::Relaxed) || self.should_quit {
                 break;
             }
-
-            // SEC-R-005: drain_events() must complete before any resize
-            // operation within the same tick to maintain parser consistency.
             self.session_manager.drain_events();
-
-            // Render current view
             self.render(terminal)?;
-
-            // Poll for input events
             if event::poll(tick_rate).map_err(|e| format!("poll: {e}"))? {
                 let ev = event::read().map_err(|e| format!("read: {e}"))?;
                 self.handle_event(ev, terminal)?;
             }
-
-            if self.should_quit {
-                break;
-            }
         }
-
         Ok(())
     }
 
     /// SEC-001: Exhaustive match on ViewState.
-    /// Input forwarding to PTY ONLY occurs in the Focus arm.
     fn handle_event(
         &mut self,
         event: Event,
         terminal: &DefaultTerminal,
     ) -> Result<(), String> {
         if let Event::Resize(..) = event {
-            // SEC-R-001: Query terminal size fresh on resize
             if let Ok(size) = terminal.size() {
                 match self.state {
-                    ViewState::Tile { .. } => {
+                    ViewState::Tile { .. } | ViewState::Confirm { .. } => {
                         let (rows, cols) = tile_inner_dims(
                             size.height,
                             size.width,
-                            self.session_manager.sessions.len(),
+                            self.session_manager.session_count(),
                         );
                         self.session_manager.resize_all(rows, cols);
                     }
                     ViewState::Focus { session_id } => {
-                        let (rows, cols) =
-                            focus_inner_dims(size.height, size.width);
-                        self.session_manager.resize_session(
-                            session_id, rows, cols,
-                        );
+                        let (rows, cols) = focus_inner_dims(size.height, size.width);
+                        self.session_manager.resize_session(session_id, rows, cols);
                     }
-                    ViewState::Help => {
-                        // Help view renders static text; no PTY resize needed.
-                    }
+                    ViewState::Help => {}
                 }
             }
             return Ok(());
@@ -151,6 +135,7 @@ impl App {
             ViewState::Focus { session_id } => {
                 self.handle_focus_event(event, session_id, terminal)
             }
+            ViewState::Confirm { .. } => self.handle_confirm_event(event, terminal),
             ViewState::Help => self.handle_help_event(event),
         }
     }
@@ -176,10 +161,36 @@ impl App {
             return Ok(());
         }
 
-        // Mouse click on a tile → focus
+        // Ctrl+w: remove selected dead session
+        if input::is_remove_session_event(&event) {
+            if let ViewState::Tile { selected: Some(pos) } = self.state {
+                if let Some(id) = self.session_manager.session_id_at(pos) {
+                    if self.session_manager.session(id).map_or(false, |s| !s.alive) {
+                        // SEC-SAR-005: Flush event queue before showing confirm
+                        flush_pending_events();
+                        self.state = ViewState::Confirm { session_id: id };
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // Ctrl+n: spawn new session
+        if input::is_new_session_event(&event) {
+            if self.session_manager.can_spawn() {
+                let (rows, cols) = self.current_tile_dims(terminal);
+                if self.session_manager.spawn_default(rows, cols).is_ok() {
+                    self.recompute_colors();
+                    self.session_manager.resize_all(rows, cols);
+                }
+            }
+            return Ok(());
+        }
+
+        // Mouse click on a tile -> focus
         if let Some(idx) = input::clicked_tile(&event, &self.tile_areas) {
-            if idx < self.session_manager.sessions.len() {
-                self.transition_to_focus(idx, terminal);
+            if let Some(id) = self.session_manager.session_id_at(idx) {
+                self.transition_to_focus(id, terminal);
                 return Ok(());
             }
         }
@@ -187,36 +198,33 @@ impl App {
         // Keyboard navigation
         if let Event::Key(key) = &event {
             match key.code {
-                ratatui::crossterm::event::KeyCode::Enter => {
-                    if let ViewState::Tile { selected: Some(idx) } = self.state {
-                        if idx < self.session_manager.sessions.len() {
-                            self.transition_to_focus(idx, terminal);
+                KeyCode::Enter => {
+                    if let ViewState::Tile { selected: Some(pos) } = self.state {
+                        if let Some(id) = self.session_manager.session_id_at(pos) {
+                            self.transition_to_focus(id, terminal);
                         }
                     }
                 }
-                ratatui::crossterm::event::KeyCode::Right | ratatui::crossterm::event::KeyCode::Tab => {
+                KeyCode::Right | KeyCode::Tab => {
                     self.move_selection(1);
                 }
-                ratatui::crossterm::event::KeyCode::Left
-                | ratatui::crossterm::event::KeyCode::BackTab => {
+                KeyCode::Left | KeyCode::BackTab => {
                     self.move_selection(-1);
                 }
-                ratatui::crossterm::event::KeyCode::Down => {
-                    let (cols, _) = tile_view::calculate_grid(
-                        self.session_manager.sessions.len(),
-                    );
+                KeyCode::Down => {
+                    let (cols, _) =
+                        tile_view::calculate_grid(self.session_manager.session_count());
                     self.move_selection(cols as isize);
                 }
-                ratatui::crossterm::event::KeyCode::Up => {
-                    let (cols, _) = tile_view::calculate_grid(
-                        self.session_manager.sessions.len(),
-                    );
+                KeyCode::Up => {
+                    let (cols, _) =
+                        tile_view::calculate_grid(self.session_manager.session_count());
                     self.move_selection(-(cols as isize));
                 }
-                ratatui::crossterm::event::KeyCode::Char(c) if c.is_ascii_digit() => {
+                KeyCode::Char(c) if c.is_ascii_digit() => {
                     let idx = c as usize - '0' as usize;
-                    if idx < self.session_manager.sessions.len() {
-                        self.transition_to_focus(idx, terminal);
+                    if let Some(id) = self.session_manager.session_id_at(idx) {
+                        self.transition_to_focus(id, terminal);
                     }
                 }
                 _ => {}
@@ -234,36 +242,40 @@ impl App {
         terminal: &DefaultTerminal,
     ) -> Result<(), String> {
         // SEC-005: Intercept unfocus hotkey BEFORE forwarding
-        if input::is_unfocus_event(&event) {
-            self.transition_to_tile(Some(session_id), terminal);
+        let close_clicked = self.close_button.as_ref()
+            .is_some_and(|pos| input::is_close_button_click(&event, pos.x, pos.y));
+        if input::is_unfocus_event(&event) || close_clicked {
+            self.scrollbar_dragging = false;
+            self.transition_to_tile(
+                self.session_manager.position_of(session_id),
+                terminal,
+            );
             return Ok(());
         }
 
-        // Mouse click on [X] → unfocus
-        if let Some(ref pos) = self.close_button {
-            if input::is_close_button_click(&event, pos.x, pos.y) {
-                self.transition_to_tile(Some(session_id), terminal);
-                return Ok(());
-            }
+        // Scrollbar interaction (click, drag, release)
+        let page_size = self.focus_page_size(terminal);
+        if scrollbar::handle_event(
+            &event,
+            &self.scrollbar_geo,
+            &mut self.scrollbar_dragging,
+            &mut self.scroll_offset,
+            self.max_scrollback,
+            page_size,
+        ) {
+            return Ok(());
         }
 
         // SEC-SCROLL-TAM-001: Intercept scroll events BEFORE PTY forwarding
+        let scroll_amount = || {
+            if matches!(event, Event::Mouse(_)) { input::MOUSE_SCROLL_LINES } else { page_size }
+        };
         if input::is_scroll_up(&event) {
-            let amount = if matches!(event, Event::Mouse(_)) {
-                input::MOUSE_SCROLL_LINES
-            } else {
-                self.focus_page_size(terminal)
-            };
-            self.scroll_offset = self.scroll_offset.saturating_add(amount);
+            self.scroll_offset = self.scroll_offset.saturating_add(scroll_amount());
             return Ok(());
         }
         if input::is_scroll_down(&event) {
-            let amount = if matches!(event, Event::Mouse(_)) {
-                input::MOUSE_SCROLL_LINES
-            } else {
-                self.focus_page_size(terminal)
-            };
-            self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+            self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount());
             return Ok(());
         }
 
@@ -279,18 +291,42 @@ impl App {
         Ok(())
     }
 
-    /// Compute page size for keyboard scrolling (visible height minus 1 for context).
-    fn focus_page_size(&self, terminal: &DefaultTerminal) -> usize {
-        terminal
-            .size()
-            .map(|s| focus_inner_dims(s.height, s.width).0 as usize)
-            .unwrap_or(20)
-            .saturating_sub(1)
-            .max(1)
+    /// Handle input in confirm view: y to confirm removal, n/Esc to cancel.
+    fn handle_confirm_event(
+        &mut self,
+        event: Event,
+        terminal: &DefaultTerminal,
+    ) -> Result<(), String> {
+        let session_id = match self.state {
+            ViewState::Confirm { session_id } => session_id,
+            _ => return Ok(()),
+        };
+        let Event::Key(key) = event else { return Ok(()) };
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let (rows, cols) = self.current_tile_dims(terminal);
+                match self.session_manager.remove_guarded(session_id, rows, cols) {
+                    Ok(pos) => {
+                        self.recompute_colors();
+                        let count = self.session_manager.session_count();
+                        let sel = if count > 0 { Some(pos.min(count - 1)) } else { None };
+                        self.transition_to_tile(sel, terminal);
+                    }
+                    Err(_) => {
+                        self.state = ViewState::Tile { selected: Some(0) };
+                    }
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                let pos = self.session_manager.position_of(session_id);
+                self.state = ViewState::Tile { selected: pos };
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
-    /// Handle input in help view. No PTY writes occur here (SEC-001).
-    /// Esc or Ctrl+h dismisses back to tile view.
+    /// Handle input in help view. No PTY writes (SEC-001).
     fn handle_help_event(&mut self, event: Event) -> Result<(), String> {
         if input::is_help_event(&event) || input::is_esc_event(&event) {
             self.state = ViewState::Tile { selected: None };
@@ -299,10 +335,10 @@ impl App {
     }
 
     /// Transition to focus view. Resizes the target session to focus dims.
-    /// SEC-R-001: Queries terminal size fresh on every view transition.
     fn transition_to_focus(&mut self, session_id: usize, terminal: &DefaultTerminal) {
         self.state = ViewState::Focus { session_id };
         self.scroll_offset = 0;
+        self.scrollbar_dragging = false;
         if let Ok(size) = terminal.size() {
             let (rows, cols) = focus_inner_dims(size.height, size.width);
             self.session_manager.resize_session(session_id, rows, cols);
@@ -310,7 +346,6 @@ impl App {
     }
 
     /// Transition to tile view. Resizes all sessions to tile dims.
-    /// SEC-R-001: Queries terminal size fresh on every view transition.
     fn transition_to_tile(
         &mut self,
         selected: Option<usize>,
@@ -322,14 +357,14 @@ impl App {
             let (rows, cols) = tile_inner_dims(
                 size.height,
                 size.width,
-                self.session_manager.sessions.len(),
+                self.session_manager.session_count(),
             );
             self.session_manager.resize_all(rows, cols);
         }
     }
 
     fn move_selection(&mut self, delta: isize) {
-        let count = self.session_manager.sessions.len();
+        let count = self.session_manager.session_count();
         if count == 0 {
             return;
         }
@@ -340,41 +375,94 @@ impl App {
         }
     }
 
+    fn focus_page_size(&self, terminal: &DefaultTerminal) -> usize {
+        terminal
+            .size()
+            .map(|s| focus_inner_dims(s.height, s.width).0 as usize)
+            .unwrap_or(20)
+            .saturating_sub(1)
+            .max(1)
+    }
+
+    fn current_tile_dims(&self, terminal: &DefaultTerminal) -> (u16, u16) {
+        terminal
+            .size()
+            .map(|s| {
+                tile_inner_dims(
+                    s.height,
+                    s.width,
+                    self.session_manager.session_count(),
+                )
+            })
+            .unwrap_or((5, 20))
+    }
+
+    fn recompute_colors(&mut self) {
+        let cwds: Vec<PathBuf> = self
+            .session_manager
+            .ordered_session_refs()
+            .iter()
+            .map(|s| s.cwd.clone())
+            .collect();
+        self.border_colors = assign_border_colors(&cwds);
+    }
+
     fn render(&mut self, terminal: &mut DefaultTerminal) -> Result<(), String> {
-        // Set scrollback offset before render (needs mutable session access)
+        // Pre-render: mutable access for scrollback
         if let ViewState::Focus { session_id } = self.state {
-            if let Some(session) = self.session_manager.sessions.get_mut(session_id) {
+            if let Some(session) = self.session_manager.session_mut(session_id) {
                 session.screen.set_scrollback(self.scroll_offset);
-                // SEC-SCROLL-OOB-001: Read back clamped value
                 self.scroll_offset = session.screen.scrollback();
+                self.max_scrollback = session.screen.max_scrollback();
             }
         }
 
+        // Pre-compute references for the draw closure
         let state = &self.state;
-        let sessions = &self.session_manager.sessions;
+        let ordered = self.session_manager.ordered_session_refs();
+        let focus_session = match self.state {
+            ViewState::Focus { session_id } => self.session_manager.session(session_id),
+            _ => None,
+        };
+        let confirm_session = match self.state {
+            ViewState::Confirm { session_id } => self.session_manager.session(session_id),
+            _ => None,
+        };
         let colors = &self.border_colors;
         let blur = self.blur_enabled;
         let scroll_offset = self.scroll_offset;
+        let max_scrollback = self.max_scrollback;
         let mut close_btn = None;
         let mut tile_areas_out = Vec::new();
+        let mut scrollbar_geo_out = None;
 
         terminal
             .draw(|frame| {
                 match state {
                     ViewState::Tile { selected } => {
                         tile_areas_out =
-                            tile_view::render(frame, sessions, colors, blur, *selected);
+                            tile_view::render(frame, &ordered, colors, blur, *selected);
                     }
-                    ViewState::Focus { session_id } => {
-                        if let Some(session) = sessions.get(*session_id) {
-                            close_btn = Some(focus_view::render(
+                    ViewState::Focus { .. } => {
+                        if let Some(session) = focus_session {
+                            let result = focus_view::render(
                                 frame,
                                 &session.screen,
                                 &session.command,
                                 &session.cwd,
                                 session.alive,
                                 scroll_offset,
-                            ));
+                                max_scrollback,
+                            );
+                            close_btn = Some(result.close_button);
+                            scrollbar_geo_out = Some(result.scrollbar);
+                        }
+                    }
+                    ViewState::Confirm { .. } => {
+                        tile_areas_out =
+                            tile_view::render(frame, &ordered, colors, blur, None);
+                        if let Some(session) = confirm_session {
+                            confirm_view::render(frame, &session.command);
                         }
                     }
                     ViewState::Help => {
@@ -386,10 +474,11 @@ impl App {
 
         self.tile_areas = tile_areas_out;
         self.close_button = close_btn;
+        self.scrollbar_geo = scrollbar_geo_out;
 
-        // Reset scrollback after render so tile view sees live content
+        // Post-render: reset scrollback
         if let ViewState::Focus { session_id } = self.state {
-            if let Some(session) = self.session_manager.sessions.get_mut(session_id) {
+            if let Some(session) = self.session_manager.session_mut(session_id) {
                 session.screen.set_scrollback(0);
             }
         }
@@ -398,18 +487,11 @@ impl App {
     }
 }
 
-fn register_signal_handlers() {
-    use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
-
-    let handler = SigHandler::Handler(handle_signal);
-    let action = SigAction::new(handler, SaFlags::empty(), SigSet::empty());
-    unsafe {
-        let _ = sigaction(Signal::SIGTERM, &action);
-        let _ = sigaction(Signal::SIGHUP, &action);
+/// SEC-SAR-005: Flush pending key events from the crossterm queue
+/// to prevent queued keypresses from being processed by a new view state.
+fn flush_pending_events() {
+    while event::poll(Duration::ZERO).unwrap_or(false) {
+        let _ = event::read();
     }
-}
-
-extern "C" fn handle_signal(_: nix::libc::c_int) {
-    QUIT_SIGNAL.store(true, Ordering::Relaxed);
 }
 

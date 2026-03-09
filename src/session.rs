@@ -1,7 +1,7 @@
 /// PTY session lifecycle management.
 ///
 /// SEC-007: The Drop impl ensures PTY file descriptors are closed and
-/// child processes are terminated on all exit paths. The master_fd is
+/// child processes are terminated on all exit paths. The host_fd is
 /// closed via libc::close, and the child receives SIGHUP followed by
 /// SIGKILL if it does not exit promptly.
 ///
@@ -32,7 +32,7 @@ impl Drop for FdGuard {
 }
 
 pub struct Session {
-    master_fd: RawFd,
+    host_fd: RawFd,
     child_pid: Pid,
     pub screen: Screen,
     pub cwd: PathBuf,
@@ -55,12 +55,12 @@ impl Session {
     ) -> Result<Self, String> {
         let pty = nix::pty::openpty(None, None).map_err(|e| format!("openpty: {e}"))?;
         // Convert OwnedFd to RawFd — we manage lifecycle manually (SEC-007)
-        let master_raw: RawFd = pty.master.into_raw_fd();
-        let slave_raw: RawFd = pty.slave.into_raw_fd();
+        let host_raw: RawFd = pty.master.into_raw_fd();
+        let device_raw: RawFd = pty.slave.into_raw_fd();
 
         // AUD-001: Guard fds so they are closed on any error path
-        let master_guard = FdGuard(master_raw);
-        let slave_guard = FdGuard(slave_raw);
+        let host_guard = FdGuard(host_raw);
+        let device_guard = FdGuard(device_raw);
 
         let parts: Vec<&str> = command.split_whitespace().collect();
         if parts.is_empty() {
@@ -82,25 +82,25 @@ impl Session {
         let env_cstrs = build_child_env(env)?;
 
         // Disarm fd guards — fork branches handle closing from here
-        std::mem::forget(master_guard);
-        std::mem::forget(slave_guard);
+        std::mem::forget(host_guard);
+        std::mem::forget(device_guard);
 
         match unsafe { fork().map_err(|e| format!("fork: {e}"))? } {
             ForkResult::Child => {
-                // Close master in child
-                unsafe { libc::close(master_raw) };
+                // Close host fd in child
+                unsafe { libc::close(host_raw) };
 
                 // Create new session and set controlling terminal
                 let _ = setsid();
-                unsafe { libc::ioctl(slave_raw, libc::TIOCSCTTY, 0) };
+                unsafe { libc::ioctl(device_raw, libc::TIOCSCTTY, 0) };
 
-                // Redirect stdio to slave PTY
+                // Redirect stdio to device PTY
                 unsafe {
-                    libc::dup2(slave_raw, 0);
-                    libc::dup2(slave_raw, 1);
-                    libc::dup2(slave_raw, 2);
-                    if slave_raw > 2 {
-                        libc::close(slave_raw);
+                    libc::dup2(device_raw, 0);
+                    libc::dup2(device_raw, 1);
+                    libc::dup2(device_raw, 2);
+                    if device_raw > 2 {
+                        libc::close(device_raw);
                     }
                 }
 
@@ -122,22 +122,22 @@ impl Session {
                 unsafe { libc::_exit(127) };
             }
             ForkResult::Parent { child } => {
-                // Close slave in parent
-                unsafe { libc::close(slave_raw) };
+                // Close device fd in parent
+                unsafe { libc::close(device_raw) };
 
-                // Set master PTY window size
+                // Set host PTY window size
                 let ws = libc::winsize {
                     ws_row: screen_rows,
                     ws_col: screen_cols,
                     ws_xpixel: 0,
                     ws_ypixel: 0,
                 };
-                unsafe { libc::ioctl(master_raw, libc::TIOCSWINSZ, &ws) };
+                unsafe { libc::ioctl(host_raw, libc::TIOCSWINSZ, &ws) };
 
-                let reader = spawn_reader(master_raw, id, event_tx);
+                let reader = spawn_reader(host_raw, id, event_tx);
 
                 Ok(Session {
-                    master_fd: master_raw,
+                    host_fd: host_raw,
                     child_pid: child,
                     screen: Screen::new(screen_rows, screen_cols, scrollback_len),
                     cwd: cwd.to_path_buf(),
@@ -149,12 +149,12 @@ impl Session {
         }
     }
 
-    /// Write input bytes to the PTY master (forwarded from focus view).
+    /// Write input bytes to the PTY host fd (forwarded from focus view).
     pub fn write_input(&self, data: &[u8]) -> Result<(), String> {
         if !self.alive {
             return Ok(());
         }
-        let ret = unsafe { libc::write(self.master_fd, data.as_ptr().cast(), data.len()) };
+        let ret = unsafe { libc::write(self.host_fd, data.as_ptr().cast(), data.len()) };
         if ret < 0 {
             return Err(format!("pty write error: {}", std::io::Error::last_os_error()));
         }
@@ -185,7 +185,7 @@ impl Session {
                 ws_xpixel: 0,
                 ws_ypixel: 0,
             };
-            unsafe { libc::ioctl(self.master_fd, libc::TIOCSWINSZ, &ws) };
+            unsafe { libc::ioctl(self.host_fd, libc::TIOCSWINSZ, &ws) };
             let _ = kill(self.child_pid, Signal::SIGWINCH);
         }
         self.screen.resize(rows, cols);
@@ -195,7 +195,7 @@ impl Session {
 /// SEC-007: Deterministic cleanup on drop.
 impl Drop for Session {
     fn drop(&mut self) {
-        unsafe { libc::close(self.master_fd) };
+        unsafe { libc::close(self.host_fd) };
 
         if self.alive {
             // Send SIGHUP to child process group
@@ -250,14 +250,14 @@ fn build_child_env(overrides: &[(String, String)]) -> Result<Vec<CString>, Strin
 
 /// Spawn a reader thread that reads from the PTY and sends events.
 fn spawn_reader(
-    master_fd: RawFd,
+    host_fd: RawFd,
     session_id: usize,
     tx: mpsc::Sender<AppEvent>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
-            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
+            let n = unsafe { libc::read(host_fd, buf.as_mut_ptr().cast(), buf.len()) };
             if n <= 0 {
                 let _ = tx.send(AppEvent::PtyClosed { session_id });
                 break;

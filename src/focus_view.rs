@@ -1,13 +1,14 @@
 /// Focused/windowed terminal view renderer.
 ///
 /// Renders a single session at full screen with a decorated border
-/// containing an [X] close button. All VT screen content is rendered
-/// from the parsed buffer — never raw PTY bytes (SEC-002).
+/// containing an [X] close button and a scrollbar. All VT screen
+/// content is rendered from the parsed buffer — never raw PTY bytes (SEC-002).
 ///
 /// SEC-005: The unfocus hotkey (Ctrl+]) is intercepted in the input
 /// router before this view is rendered. The [X] button provides a
 /// mouse-based fallback.
 
+use crate::scrollbar::{self, ScrollbarGeometry};
 use crate::vt::Screen;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -21,8 +22,14 @@ pub struct CloseButtonPos {
     pub y: u16,
 }
 
+/// Result from rendering the focus view.
+pub struct FocusViewResult {
+    pub close_button: CloseButtonPos,
+    pub scrollbar: ScrollbarGeometry,
+}
+
 /// Render the focused view for a session.
-/// Returns the [X] button position for click detection.
+/// Returns the close button position and scrollbar geometry for interaction.
 pub fn render(
     frame: &mut Frame,
     screen: &Screen,
@@ -30,7 +37,8 @@ pub fn render(
     cwd: &std::path::Path,
     alive: bool,
     scroll_offset: usize,
-) -> CloseButtonPos {
+    max_scrollback: usize,
+) -> FocusViewResult {
     let area = frame.area();
     let status = if alive { "" } else { " [exited]" };
     let scroll_info = if scroll_offset > 0 {
@@ -82,10 +90,19 @@ pub fn render(
         },
     );
 
+    // Compute and render scrollbar on right border
+    let geo = scrollbar::compute_geometry(
+        area,
+        scroll_offset,
+        max_scrollback,
+        inner.height,
+    );
+    scrollbar::render(frame, &geo);
+
     if inner.width == 0 || inner.height == 0 {
-        return CloseButtonPos {
-            x: close_x,
-            y: close_y,
+        return FocusViewResult {
+            close_button: CloseButtonPos { x: close_x, y: close_y },
+            scrollbar: geo,
         };
     }
 
@@ -98,9 +115,9 @@ pub fn render(
         frame.set_cursor_position((inner.x + col, inner.y + row));
     }
 
-    CloseButtonPos {
-        x: close_x,
-        y: close_y,
+    FocusViewResult {
+        close_button: CloseButtonPos { x: close_x, y: close_y },
+        scrollbar: geo,
     }
 }
 

@@ -36,7 +36,7 @@ Every agent applies all four lenses to every task. No lens is optional. No lens 
 
 **Operational reality.** Systems do not exist in development environments. They exist in production, where they are operated by humans under time pressure with incomplete information. Design for observability, debuggability, and graceful degradation. The best feature in the world is worthless if the on-call engineer cannot understand what it is doing when it misbehaves.
 
-### Lens 2: White Hat Security Engineer
+### Lens 2: Ethical Hacker / Security Engineer
 
 **"What is possible" takes precedence over "what is probable."** Probability-based security reasoning fails against motivated, skilled adversaries. An attacker needs to find one path. You need to close all of them. Evaluate every threat on the basis of what a capable adversary could do, not just what an average attacker would do.
 

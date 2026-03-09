@@ -19,6 +19,9 @@ COPY rust-toolchain.toml /build/
 WORKDIR /build
 RUN rustup show
 
+# Install cargo-audit for dependency vulnerability scanning
+RUN cargo install cargo-audit --locked
+
 # Copy manifests for dependency caching
 COPY Cargo.toml Cargo.lock* /build/
 
@@ -34,6 +37,9 @@ COPY tests/ /build/tests/
 
 # Build release binary
 RUN cargo build --release
+
+# Audit dependencies for known vulnerabilities
+RUN cargo audit
 
 # Run tests
 RUN cargo test --release

@@ -53,28 +53,46 @@ Sessions are defined as positional arguments. Use `command@path` to specify a wo
 
 # Mix of tools
 ./tuix "opencode@./frontend" "claude@./backend" "bash@./infra"
+
+# Limit concurrent sessions and scrollback
+./tuix bash --max-sessions 10 --scrollback 5000
 ```
+
+### Options
+
+| Flag             | Default | Description                              |
+|------------------|---------|------------------------------------------|
+| `--env KEY=VALUE`| —       | Environment variable override            |
+| `--scrollback N` | 1000    | Scrollback lines per session (0 to disable) |
+| `--max-sessions N` | 20   | Maximum concurrent sessions              |
 
 ## Controls
 
 ### Tile view (default)
 
-| Key              | Action                 |
-|------------------|------------------------|
-| Click tile       | Focus that session     |
-| Enter            | Focus selected tile    |
-| Arrow keys / Tab | Navigate between tiles |
-| 0-9              | Focus session by index |
-| Ctrl+b           | Toggle blur mode       |
-| Ctrl+q           | Quit                   |
+| Key              | Action                      |
+|------------------|-----------------------------|
+| Click tile       | Focus that session          |
+| Enter            | Focus selected tile         |
+| Arrow keys / Tab | Navigate between tiles      |
+| 0-9              | Focus session by index      |
+| Ctrl+n           | Spawn new session           |
+| Ctrl+w           | Remove dead session (y/n)   |
+| Ctrl+b           | Toggle blur mode            |
+| Ctrl+h           | Toggle help screen          |
+| Ctrl+q           | Quit                        |
 
 ### Focus view (interactive)
 
-| Key             | Action               |
-|-----------------|----------------------|
-| Ctrl+]          | Return to tile view  |
-| Click [X]       | Return to tile view  |
-| All other input | Forwarded to session |
+| Key              | Action                      |
+|------------------|-----------------------------|
+| Ctrl+]           | Return to tile view         |
+| Click [X]        | Return to tile view         |
+| Scroll wheel     | Scroll through history      |
+| Scrollbar drag   | Scroll through history      |
+| Shift+PgUp/PgDn | Page through history        |
+| Shift+Click/Drag | Select text (native)        |
+| All other input  | Forwarded to session        |
 
 ## Other make targets
 

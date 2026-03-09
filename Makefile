@@ -12,7 +12,7 @@ EXPORT_IMAGE := tuix-export
 VOLUME_NAME := tuix-vol
 BINARY_NAME := tuix
 
-.PHONY: build test clean run
+.PHONY: build test clean run update
 
 ## build: Compile the binary inside a container and export it via volume.
 build:
@@ -52,3 +52,9 @@ run:
 		exit 1; \
 	fi
 	./$(BINARY_NAME) $(ARGS)
+
+update:
+	@echo "==> Updating dependencies..."
+	cargo update
+	@echo "==> Dependencies updated."
+

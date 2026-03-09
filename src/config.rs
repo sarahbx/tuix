@@ -6,6 +6,15 @@
 use clap::Parser;
 use std::path::PathBuf;
 
+/// Default number of scrollback lines per session.
+pub const DEFAULT_SCROLLBACK: usize = 1000;
+
+/// Default maximum number of concurrent sessions.
+pub const DEFAULT_MAX_SESSIONS: usize = 20;
+
+/// SEC-SCROLL-DoS-001: Maximum scrollback to prevent memory exhaustion.
+pub const MAX_SCROLLBACK: usize = 50_000;
+
 #[derive(Parser)]
 #[command(
     name = "tuix",
@@ -30,7 +39,11 @@ KEYBINDINGS:
                 Click [X]          Return to tile view
                 Scroll wheel       Scroll through history
                 Shift+PgUp/PgDn    Page through history
-                All other input    Forwarded to session"
+                Shift+Click/Drag   Select text (native)
+                All other input    Forwarded to session
+
+    Session:    Ctrl+w             Remove dead session
+                Ctrl+n             New session"
 )]
 pub struct Config {
     /// Session definitions: "command" or "command@path"
@@ -44,8 +57,12 @@ pub struct Config {
     pub env_overrides: Vec<(String, String)>,
 
     /// Number of scrollback lines per session (0 to disable).
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = DEFAULT_SCROLLBACK)]
     pub scrollback: usize,
+
+    /// Maximum number of concurrent sessions.
+    #[arg(long, default_value_t = DEFAULT_MAX_SESSIONS)]
+    pub max_sessions: usize,
 }
 
 /// A parsed session definition ready for spawning.
@@ -101,9 +118,6 @@ pub fn parse_session_defs(config: &Config) -> Result<Vec<SessionDef>, String> {
         .map(|s| parse_session_def(s, &config.env_overrides))
         .collect()
 }
-
-/// SEC-SCROLL-DoS-001: Maximum scrollback to prevent memory exhaustion.
-const MAX_SCROLLBACK: usize = 50_000;
 
 /// Parse and validate all session definitions before TUI launch.
 /// Checks that commands exist in PATH and directories exist.
@@ -186,7 +200,8 @@ mod tests {
         let config = Config {
             sessions: vec!["tuix_nonexistent_cmd_xyz".to_string()],
             env_overrides: vec![],
-            scrollback: 1000,
+            scrollback: DEFAULT_SCROLLBACK,
+            max_sessions: DEFAULT_MAX_SESSIONS,
         };
         let err = validate(&config).unwrap_err();
         assert!(err.contains("not found in PATH"), "got: {err}");
@@ -197,7 +212,8 @@ mod tests {
         let config = Config {
             sessions: vec!["bash@/no/such/dir/tuix_test".to_string()],
             env_overrides: vec![],
-            scrollback: 1000,
+            scrollback: DEFAULT_SCROLLBACK,
+            max_sessions: DEFAULT_MAX_SESSIONS,
         };
         let err = validate(&config).unwrap_err();
         assert!(err.contains("does not exist"), "got: {err}");
@@ -209,7 +225,8 @@ mod tests {
         let config = Config {
             sessions: vec!["sh".to_string()],
             env_overrides: vec![],
-            scrollback: 1000,
+            scrollback: DEFAULT_SCROLLBACK,
+            max_sessions: DEFAULT_MAX_SESSIONS,
         };
         assert!(validate(&config).is_ok());
     }
@@ -219,7 +236,8 @@ mod tests {
         let config = Config {
             sessions: vec!["sh".to_string()],
             env_overrides: vec![],
-            scrollback: 100_000,
+            scrollback: MAX_SCROLLBACK + 1,
+            max_sessions: DEFAULT_MAX_SESSIONS,
         };
         let err = validate(&config).unwrap_err();
         assert!(err.contains("50000"), "got: {err}");
@@ -231,6 +249,7 @@ mod tests {
             sessions: vec!["sh".to_string()],
             env_overrides: vec![],
             scrollback: 0,
+            max_sessions: DEFAULT_MAX_SESSIONS,
         };
         assert!(validate(&config).is_ok());
     }

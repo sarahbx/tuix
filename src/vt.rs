@@ -58,6 +58,18 @@ impl Screen {
         self.parser.screen().cursor_position()
     }
 
+    /// Get the maximum scrollback offset (total lines in scrollback buffer).
+    /// Workaround: vt100 crate does not expose a direct max_scrollback() API.
+    /// Uses set-and-read-back — sets scrollback to usize::MAX (vt100 clamps
+    /// internally), reads the clamped value, then restores the original offset.
+    pub fn max_scrollback(&mut self) -> usize {
+        let current = self.parser.screen().scrollback();
+        self.parser.set_scrollback(usize::MAX);
+        let max = self.parser.screen().scrollback();
+        self.parser.set_scrollback(current);
+        max
+    }
+
     /// Whether the child process has hidden the cursor (CSI ?25l).
     pub fn hide_cursor(&self) -> bool {
         self.parser.screen().hide_cursor()

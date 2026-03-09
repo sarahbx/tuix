@@ -22,7 +22,7 @@ use std::path::PathBuf;
 /// Render the tile grid view. Returns tile areas for mouse click detection.
 pub fn render(
     frame: &mut Frame,
-    sessions: &[Session],
+    sessions: &[&Session],
     colors: &HashMap<PathBuf, Color>,
     blur: bool,
     selected: Option<usize>,

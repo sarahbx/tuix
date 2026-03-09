@@ -37,18 +37,23 @@ fn main() {
         }
     };
 
-    if let Err(e) = run(defs, config.scrollback) {
+    if let Err(e) = run(defs, config.scrollback, config.max_sessions, config.env_overrides) {
         eprintln!("tuix: {e}");
         std::process::exit(1);
     }
 }
 
-fn run(defs: Vec<config::SessionDef>, scrollback: usize) -> Result<(), String> {
+fn run(
+    defs: Vec<config::SessionDef>,
+    scrollback: usize,
+    max_sessions: usize,
+    env_overrides: Vec<(String, String)>,
+) -> Result<(), String> {
     // AUD-003: enable_raw_mode is called first; cleanup always runs
     // regardless of where subsequent setup or execution fails.
     enable_raw_mode().map_err(|e| format!("raw mode: {e}"))?;
 
-    let result = run_inner(defs, scrollback);
+    let result = run_inner(defs, scrollback, max_sessions, env_overrides);
 
     // Restore terminal (always, even on error — AUD-003)
     let _ = disable_raw_mode();
@@ -57,7 +62,12 @@ fn run(defs: Vec<config::SessionDef>, scrollback: usize) -> Result<(), String> {
     result
 }
 
-fn run_inner(defs: Vec<config::SessionDef>, scrollback: usize) -> Result<(), String> {
+fn run_inner(
+    defs: Vec<config::SessionDef>,
+    scrollback: usize,
+    max_sessions: usize,
+    env_overrides: Vec<(String, String)>,
+) -> Result<(), String> {
     let mut stdout = io::stdout();
     ratatui::crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
         .map_err(|e| format!("terminal setup: {e}"))?;
@@ -66,6 +76,6 @@ fn run_inner(defs: Vec<config::SessionDef>, scrollback: usize) -> Result<(), Str
     let mut terminal = ratatui::Terminal::new(backend)
         .map_err(|e| format!("terminal init: {e}"))?;
 
-    app::App::new(defs, scrollback, &terminal)
+    app::App::new(defs, scrollback, max_sessions, env_overrides, &terminal)
         .and_then(|mut app| app.run(&mut terminal))
 }
